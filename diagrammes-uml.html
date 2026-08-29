@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>La Guilde · Diagrammes UML fondateurs</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.4.1/mermaid.min.js"></script>
+<style>
+  body { background:#0A192F; color:#F0F0F0; font-family:'Geist','Segoe UI',sans-serif; margin:0; padding:2rem; }
+  h1 { color:#64FFDA; font-weight:600; }
+  h2 { color:#64FFDA; border-bottom:1px solid #64FFDA33; padding-bottom:.4rem; margin-top:3rem; }
+  .carte { background:#112240; border-radius:12px; padding:1.5rem; margin:1.5rem 0; overflow-x:auto; }
+  p { max-width:70ch; line-height:1.6; }
+  .mermaid { display:flex; justify-content:center; }
+  footer { margin-top:3rem; color:#8892B0; font-size:.85rem; }
+</style>
+</head>
+<body>
+<h1>La Guilde · Diagrammes UML fondateurs</h1>
+<p>Version de relecture v1.1 du 13/08/2026, identifiants en anglais (états, classes, actions),
+annotations en français. Les versions finales pour les slides seront reprises à la charte
+dans les supports de séance.</p>
+
+<h2>1. Cycle de vie d'une quête (états-transitions)</h2>
+<p>Le schéma pivot des deux modules : il dicte les actions que l'API accepte et les boutons que le front affiche.</p>
+<div class="carte"><pre class="mermaid">
+stateDiagram-v2
+    direction LR
+
+    [*] --> OPEN : createQuest<br/>(récompense sous séquestre)
+
+    OPEN --> IN_PROGRESS : take<br/>(prise par un aventurier)
+    OPEN --> CANCELLED : cancel par l'auteur<br/>(séquestre remboursé)
+
+    IN_PROGRESS --> OPEN : abandon du preneur<br/>(retour au tableau)
+    IN_PROGRESS --> COMPLETED : complete<br/>(fin déclarée par le preneur)
+
+    COMPLETED --> VALIDATED : validate par l'auteur<br/>(récompense créditée, XP, badges)
+
+    VALIDATED --> [*]
+    CANCELLED --> [*]
+
+    note right of OPEN
+        Modifiable par l'auteur
+        uniquement dans cet état
+    end note
+
+    note right of VALIDATED
+        LA transaction du domaine :
+        transfert des points,
+        attribution d'XP aux deux,
+        évaluation des badges
+    end note
+
+</pre></div>
+
+<h2>2. Le domaine (diagramme de classes)</h2>
+<p>Les entités, leurs relations et les opérations du domaine. Le niveau et le titre honorifique sont calculés, jamais stockés.</p>
+<div class="carte"><pre class="mermaid">
+classDiagram
+    direction LR
+
+    class Adventurer {
+        +UUID id
+        +String username
+        +String email
+        -String passwordHash
+        +String avatarUrl
+        +Int xp
+        +Int helpPoints
+        +Role role
+        +DateTime memberSince
+        +level() Int
+        +honoraryTitle() String
+        +canAfford(reward) Boolean
+    }
+
+    class Quest {
+        +UUID id
+        +String title
+        +String description
+        +QuestType type
+        +QuestCategory category
+        +QuestStatus status
+        +Int reward
+        +String photoUrl
+        +DateTime createdAt
+        +DateTime takenAt
+        +DateTime completedAt
+        +DateTime validatedAt
+        +take(taker)
+        +abandon()
+        +complete()
+        +validate()
+        +cancel()
+    }
+
+    class Badge {
+        +String code
+        +String name
+        +String description
+        +String icon
+        +Boolean automatic
+    }
+
+    class BadgeAward {
+        +DateTime awardedAt
+    }
+
+    class Role {
+        <<enumeration>>
+        MEMBER
+        GUILD_MASTER
+    }
+
+    class QuestStatus {
+        <<enumeration>>
+        OPEN
+        IN_PROGRESS
+        COMPLETED
+        VALIDATED
+        CANCELLED
+    }
+
+    class QuestType {
+        <<enumeration>>
+        HELP
+        BARTER
+    }
+
+    Adventurer "1" --> "0..*" Quest : poste (author) >
+    Adventurer "0..1" --> "0..*" Quest : prend (taker) >
+    Adventurer "1" --> "0..*" BadgeAward : détient >
+    BadgeAward "0..*" --> "1" Badge : référence >
+    Quest --> QuestStatus
+    Quest --> QuestType
+    Adventurer --> Role
+
+</pre></div>
+
+<footer>La Guilde · M1 DFS 2026-2027 · contrat v1.1</footer>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'dark',
+  themeVariables: {
+    primaryColor: '#112240',
+    primaryTextColor: '#F0F0F0',
+    primaryBorderColor: '#64FFDA',
+    lineColor: '#64FFDA',
+    secondaryColor: '#0A192F',
+    tertiaryColor: '#112240',
+    fontFamily: 'Geist, Segoe UI, sans-serif'
+  }
+});
+</script>
+</body>
+</html>

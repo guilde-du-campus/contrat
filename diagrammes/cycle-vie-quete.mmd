@@ -1,0 +1,30 @@
+---
+title: Cycle de vie d'une quête
+---
+stateDiagram-v2
+    direction LR
+
+    [*] --> OPEN : createQuest<br/>(récompense sous séquestre)
+
+    OPEN --> IN_PROGRESS : take<br/>(prise par un aventurier)
+    OPEN --> CANCELLED : cancel par l'auteur<br/>(séquestre remboursé)
+
+    IN_PROGRESS --> OPEN : abandon du preneur<br/>(retour au tableau)
+    IN_PROGRESS --> COMPLETED : complete<br/>(fin déclarée par le preneur)
+
+    COMPLETED --> VALIDATED : validate par l'auteur<br/>(récompense créditée, XP, badges)
+
+    VALIDATED --> [*]
+    CANCELLED --> [*]
+
+    note right of OPEN
+        Modifiable par l'auteur
+        uniquement dans cet état
+    end note
+
+    note right of VALIDATED
+        LA transaction du domaine :
+        transfert des points,
+        attribution d'XP aux deux,
+        évaluation des badges
+    end note

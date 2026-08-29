@@ -1,0 +1,81 @@
+---
+title: Le domaine de la Guilde · diagramme de classes
+---
+classDiagram
+    direction LR
+
+    class Adventurer {
+        +UUID id
+        +String username
+        +String email
+        -String passwordHash
+        +String avatarUrl
+        +Int xp
+        +Int helpPoints
+        +Role role
+        +DateTime memberSince
+        +level() Int
+        +honoraryTitle() String
+        +canAfford(reward) Boolean
+    }
+
+    class Quest {
+        +UUID id
+        +String title
+        +String description
+        +QuestType type
+        +QuestCategory category
+        +QuestStatus status
+        +Int reward
+        +String photoUrl
+        +DateTime createdAt
+        +DateTime takenAt
+        +DateTime completedAt
+        +DateTime validatedAt
+        +take(taker)
+        +abandon()
+        +complete()
+        +validate()
+        +cancel()
+    }
+
+    class Badge {
+        +String code
+        +String name
+        +String description
+        +String icon
+        +Boolean automatic
+    }
+
+    class BadgeAward {
+        +DateTime awardedAt
+    }
+
+    class Role {
+        <<enumeration>>
+        MEMBER
+        GUILD_MASTER
+    }
+
+    class QuestStatus {
+        <<enumeration>>
+        OPEN
+        IN_PROGRESS
+        COMPLETED
+        VALIDATED
+        CANCELLED
+    }
+
+    class QuestType {
+        <<enumeration>>
+        HELP
+        BARTER
+    }
+
+    Adventurer "1" --> "0..*" Quest : poste (author) >
+    Adventurer "0..1" --> "0..*" Quest : prend (taker) >
+    Adventurer "1" --> "0..*" BadgeAward : détient >
+    BadgeAward "0..*" --> "1" Badge : référence >
+    Quest --> QuestStatus
+    Quest --> QuestType
+    Adventurer --> Role

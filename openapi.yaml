@@ -1,0 +1,1129 @@
+# =============================================================================
+# La Guilde · Contrat d'API v1.1
+# -----------------------------------------------------------------------------
+# Ce fichier est LE contrat entre le front (module Développement front, S1)
+# et le back (module Développement côté serveur, S2). Le front le consomme,
+# le back l'implémente. Toute évolution passe par une nouvelle version.
+#
+# Convention de langue : le code se écrit en anglais, toujours (routes,
+# champs, enums, identifiants). C'est la pratique professionnelle, et on
+# l'applique dès le premier jour. La documentation, elle, est en français :
+# c'est la langue de travail de la promo.
+# =============================================================================
+openapi: 3.0.3
+
+info:
+  title: La Guilde · API
+  version: 1.1.0
+  description: |
+    API de la Guilde, la plateforme d'entraide et de troc du campus.
+
+    ## Le principe
+    Un aventurier poste une **quête** (une demande de coup de main ou un troc).
+    Un autre la prend, la réalise, puis l'auteur la valide. La validation
+    transfère la récompense en **points d'entraide** (`helpPoints`) et fait
+    gagner de l'**expérience** (`xp`), parfois un **badge**.
+
+    ## Authentification
+    Toutes les routes (sauf l'inscription, la connexion et la consultation
+    publique du tableau des quêtes) exigent un jeton JWT transmis dans
+    l'en-tête `Authorization: Bearer <jeton>`. Le jeton d'accès expire au bout
+    de 15 minutes, le jeton de rafraîchissement au bout de 7 jours.
+
+    ## Erreurs
+    Toutes les erreurs suivent la RFC 7807 (`application/problem+json`) :
+    un `type`, un `title`, un `status`, un `detail` lisible par un humain.
+    Les textes destinés aux utilisateurs sont en français.
+
+    ## Temps réel
+    Les notifications passent par WebSocket sur `/v1/realtime`
+    (voir la section « x-realtime » en bas de ce fichier).
+
+    ## Codex GraphQL
+    La consultation (lecture seule) est aussi exposée en GraphQL sur
+    `/v1/codex`. Le schéma vit dans le fichier `codex.graphql`.
+  contact:
+    name: Le maître de guilde (formateur)
+    email: marius@sergent.dev
+  license:
+    name: Usage pédagogique · MyDigitalSchool / Sergent.dev
+    url: https://sergent.dev
+
+servers:
+  - url: http://localhost:3000/v1
+    description: Environnement local (docker compose up)
+  - url: https://api.guilde.sergent.dev/v1
+    description: API de référence hébergée (semestre 1)
+
+tags:
+  - name: Auth
+    description: Inscription, connexion et rafraîchissement des jetons
+  - name: Adventurers
+    description: Les membres de la Guilde et leurs profils
+  - name: Quests
+    description: Le tableau des quêtes et leur cycle de vie
+  - name: Badges
+    description: Les distinctions gagnées par les aventuriers
+  - name: Media
+    description: Upload des photos de quêtes et avatars
+
+paths:
+
+  # ---------------------------------------------------------------------------
+  # AUTH
+  # ---------------------------------------------------------------------------
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Créer un compte d'aventurier
+      description: |
+        Crée le compte et retourne directement la paire de jetons : le nouvel
+        aventurier est connecté dès son inscription. Le mot de passe exige
+        12 caractères minimum (recommandation CNIL/ANSSI).
+      operationId: register
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Registration'
+            example:
+              username: "Merlin_Du_42"
+              email: "merlin@campus.fr"
+              password: "correct-cheval-pile-agrafe"
+      responses:
+        '201':
+          description: Compte créé, jetons fournis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '409':
+          description: Pseudo ou email déjà pris
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Se connecter
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: Connexion réussie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '401':
+          description: Identifiants invalides (message volontairement flou)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Obtenir un nouveau jeton d'accès
+      description: |
+        Échange un jeton de rafraîchissement valide contre une nouvelle paire.
+        L'ancien jeton de rafraîchissement est révoqué (rotation).
+      operationId: refresh
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          description: Nouvelle paire de jetons
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '401':
+          description: Jeton expiré, inconnu ou déjà utilisé
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  # ---------------------------------------------------------------------------
+  # ADVENTURERS
+  # ---------------------------------------------------------------------------
+  /me:
+    get:
+      tags: [Adventurers]
+      summary: Mon profil
+      operationId: getMyProfile
+      responses:
+        '200':
+          description: Le profil complet de l'aventurier connecté
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrivateAdventurer'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Adventurers]
+      summary: Modifier mon profil
+      description: Seuls le pseudo et l'avatar sont modifiables ici.
+      operationId: updateMyProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  minLength: 3
+                  maxLength: 30
+                avatarUrl:
+                  type: string
+                  format: uri
+                  nullable: true
+      responses:
+        '200':
+          description: Profil mis à jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrivateAdventurer'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Pseudo déjà pris
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /adventurers:
+    get:
+      tags: [Adventurers]
+      summary: Lister les aventuriers de la Guilde
+      operationId: listAdventurers
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: sort
+          in: query
+          description: Champ de tri, préfixé de `-` pour l'ordre décroissant
+          schema:
+            type: string
+            enum: [username, -username, xp, -xp, helpPoints, -helpPoints]
+            default: -xp
+      responses:
+        '200':
+          description: Page d'aventuriers
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Pagination'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/PublicAdventurer'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /adventurers/{id}:
+    get:
+      tags: [Adventurers]
+      summary: Consulter le profil public d'un aventurier
+      operationId: getAdventurer
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Profil public, badges compris
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicAdventurer'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /adventurers/{id}/badges:
+    post:
+      tags: [Badges]
+      summary: Attribuer un badge manuellement (maître de guilde)
+      description: |
+        Réservé au rôle `GUILD_MASTER`. Les autres badges s'attribuent
+        automatiquement selon les règles du domaine (voir MODELE_DE_DONNEES.md).
+      operationId: awardBadge
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [badgeCode]
+              properties:
+                badgeCode:
+                  type: string
+                  example: "GUILD_MASTERS_PICK"
+      responses:
+        '201':
+          description: Badge attribué
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwardedBadge'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: L'aventurier possède déjà ce badge
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  # ---------------------------------------------------------------------------
+  # QUESTS
+  # ---------------------------------------------------------------------------
+  /quests:
+    get:
+      tags: [Quests]
+      summary: Le tableau des quêtes
+      description: |
+        Route publique : le tableau se consulte sans compte, c'est la vitrine
+        de la Guilde. Filtres cumulables, pagination par page.
+      operationId: listQuests
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/QuestStatus'
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/QuestType'
+        - name: category
+          in: query
+          schema:
+            $ref: '#/components/schemas/QuestCategory'
+        - name: authorId
+          in: query
+          description: Les quêtes postées par cet aventurier
+          schema:
+            type: string
+            format: uuid
+        - name: takerId
+          in: query
+          description: Les quêtes prises par cet aventurier
+          schema:
+            type: string
+            format: uuid
+        - name: q
+          in: query
+          description: Recherche plein texte sur le titre et la description
+          schema:
+            type: string
+            maxLength: 100
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [createdAt, -createdAt, reward, -reward]
+            default: -createdAt
+      responses:
+        '200':
+          description: Page de quêtes
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Pagination'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Quest'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    post:
+      tags: [Quests]
+      summary: Poster une quête au tableau
+      description: |
+        La récompense est mise sous séquestre : elle est débitée des points
+        de l'auteur à la création et créditée au preneur à la validation.
+        Poster exige donc d'avoir assez de points (chaque aventurier démarre
+        avec 100 points de bienvenue).
+      operationId: createQuest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewQuest'
+            example:
+              title: "SOS migration Prisma qui casse tout"
+              description: "Ma migration supprime une colonne pleine de données. Besoin d'un regard expert avant de faire une bêtise."
+              type: "HELP"
+              category: "DEV"
+              reward: 30
+              photoUrl: null
+      responses:
+        '201':
+          description: Quête créée, statut OPEN
+          headers:
+            Location:
+              description: URL de la quête créée
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Points d'entraide insuffisants pour la récompense
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /quests/{id}:
+    get:
+      tags: [Quests]
+      summary: Consulter une quête
+      operationId: getQuest
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: La quête, avec son auteur et son éventuel preneur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Quests]
+      summary: Modifier une quête ouverte
+      description: |
+        Réservé à l'auteur, et uniquement tant que la quête est OPEN.
+        Une quête prise ne se modifie plus : le preneur s'est engagé sur
+        un périmètre. Changer la récompense ajuste le séquestre.
+      operationId: updateQuest
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  minLength: 5
+                  maxLength: 120
+                description:
+                  type: string
+                  maxLength: 2000
+                category:
+                  $ref: '#/components/schemas/QuestCategory'
+                reward:
+                  type: integer
+                  minimum: 0
+                  maximum: 500
+                photoUrl:
+                  type: string
+                  format: uri
+                  nullable: true
+      responses:
+        '200':
+          description: Quête mise à jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidTransition'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [Quests]
+      summary: Supprimer une quête (modération)
+      description: |
+        Réservé au maître de guilde, pour la modération. L'auteur d'une quête
+        passe lui par l'annulation, qui garde une trace. Si le séquestre
+        court toujours, il est remboursé à l'auteur.
+      operationId: deleteQuest
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Quête supprimée, séquestre remboursé à l'auteur
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # Les cinq actions du cycle de vie. Des verbes, en anglais, un POST par
+  # transition : la table des transitions du domaine décide, jamais le client.
+  /quests/{id}/take:
+    post:
+      tags: [Quests]
+      summary: Prendre une quête
+      description: |
+        L'aventurier connecté devient le preneur, la quête passe IN_PROGRESS.
+        On ne prend pas sa propre quête, et une seule quête à la fois
+        par preneur (règle pédagogique : ça force à finir ce qu'on commence).
+        Déclenche la notification temps réel `quest.taken` vers l'auteur.
+      operationId: takeQuest
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Quête prise, statut IN_PROGRESS
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidTransition'
+
+  /quests/{id}/abandon:
+    post:
+      tags: [Quests]
+      summary: Abandonner une quête prise
+      description: |
+        Le preneur renonce, la quête retourne au statut OPEN et redevient
+        disponible au tableau. Sans pénalité en v1 (les malus, c'est une
+        discussion de la parenthèse gamification).
+      operationId: abandonQuest
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Quête rendue au tableau, statut OPEN
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidTransition'
+
+  /quests/{id}/complete:
+    post:
+      tags: [Quests]
+      summary: Déclarer la quête terminée
+      description: |
+        Réservé au preneur : « j'ai fini, à toi de vérifier ». La quête passe
+        COMPLETED et attend la validation de l'auteur. Déclenche la
+        notification `quest.completed` vers l'auteur.
+      operationId: completeQuest
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Quête en attente de validation, statut COMPLETED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidTransition'
+
+  /quests/{id}/validate:
+    post:
+      tags: [Quests]
+      summary: Valider la quête terminée
+      description: |
+        Réservé à l'auteur. C'est LA transaction du domaine : la récompense
+        sous séquestre est créditée au preneur, l'expérience est attribuée
+        aux deux aventuriers, les badges automatiques sont évalués.
+        Déclenche `quest.validated` vers le preneur, et `badge.awarded` le
+        cas échéant.
+      operationId: validateQuest
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Quête validée, récompense transférée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidTransition'
+
+  /quests/{id}/cancel:
+    post:
+      tags: [Quests]
+      summary: Annuler sa quête ouverte
+      description: |
+        Réservé à l'auteur, uniquement depuis le statut OPEN. Le séquestre
+        est remboursé. La quête reste visible dans l'historique de l'auteur
+        avec le statut CANCELLED.
+      operationId: cancelQuest
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Quête annulée, séquestre remboursé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidTransition'
+
+  # ---------------------------------------------------------------------------
+  # BADGES
+  # ---------------------------------------------------------------------------
+  /badges:
+    get:
+      tags: [Badges]
+      summary: Le livre des badges
+      description: Tous les badges existants et leurs conditions d'obtention.
+      operationId: listBadges
+      security: []
+      responses:
+        '200':
+          description: La liste complète des badges
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Badge'
+        '429':
+          description: Trop de requêtes (limitation de débit)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  # ---------------------------------------------------------------------------
+  # MEDIA
+  # ---------------------------------------------------------------------------
+  /media:
+    post:
+      tags: [Media]
+      summary: Uploader une photo
+      description: |
+        Reçoit une image (JPEG, PNG ou WebP, 5 Mo maximum), la redimensionne
+        côté serveur et retourne l'URL à utiliser dans `photoUrl` ou
+        `avatarUrl`. Le serveur revalide le type réel du fichier : jamais
+        confiance au client, y compris sur le Content-Type.
+      operationId: uploadMedia
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Image stockée
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url:
+                    type: string
+                    format: uri
+                    example: "https://api.guilde.sergent.dev/media/7f3a...webp"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          description: Fichier trop lourd (5 Mo maximum)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '415':
+          description: Format non supporté (JPEG, PNG, WebP uniquement)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+# =============================================================================
+# COMPOSANTS
+# =============================================================================
+components:
+
+  securitySchemes:
+    jwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Jeton d'accès obtenu à la connexion, durée de vie 15 minutes
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      description: Numéro de page, à partir de 1
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Limit:
+      name: limit
+      in: query
+      description: Nombre d'éléments par page
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 20
+
+  responses:
+    Unauthorized:
+      description: Jeton absent, invalide ou expiré
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: Authentifié mais pas autorisé (mauvais rôle ou pas le bon aventurier)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: La ressource n'existe pas
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    InvalidTransition:
+      description: |
+        L'action est incompatible avec le statut actuel de la quête
+        (exemple : prendre une quête déjà IN_PROGRESS). Le détail précise
+        le statut actuel et les transitions permises.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: "https://guilde.sergent.dev/problems/invalid-transition"
+            title: "Transition invalide"
+            status: 409
+            detail: "La quête est IN_PROGRESS, elle ne peut pas être prise. Transitions possibles depuis IN_PROGRESS : abandon, complete."
+    ValidationError:
+      description: Le corps ou les paramètres de la requête ne respectent pas le schéma
+      content:
+        application/problem+json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Problem'
+              - type: object
+                properties:
+                  fields:
+                    type: array
+                    description: Le détail champ par champ
+                    items:
+                      type: object
+                      properties:
+                        field:
+                          type: string
+                          example: "title"
+                        message:
+                          type: string
+                          example: "5 caractères minimum"
+
+  schemas:
+
+    # --- Auth ---------------------------------------------------------------
+    Registration:
+      type: object
+      required: [username, email, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 30
+          pattern: '^[\p{L}0-9_-]+$'
+          description: Lettres, chiffres, tirets et underscores
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 12
+          description: 12 caractères minimum, une phrase de passe fait très bien l'affaire
+
+    TokenPair:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          description: JWT à mettre dans l'en-tête Authorization, expire en 15 minutes
+        refreshToken:
+          type: string
+          description: À échanger sur /auth/refresh, expire en 7 jours
+        adventurer:
+          $ref: '#/components/schemas/PrivateAdventurer'
+
+    # --- Adventurers --------------------------------------------------------
+    PublicAdventurer:
+      type: object
+      description: Ce que tout le monde voit d'un aventurier
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+        level:
+          type: integer
+          description: Calculé depuis l'expérience (voir MODELE_DE_DONNEES.md)
+        xp:
+          type: integer
+        honoraryTitle:
+          type: string
+          description: Dérivé du niveau (Novice, Compagnon, Expert...), affiché en français
+          example: "Compagnon"
+        badges:
+          type: array
+          items:
+            $ref: '#/components/schemas/AwardedBadge'
+        validatedQuestsCount:
+          type: integer
+          description: Nombre de quêtes réalisées et validées en tant que preneur
+        memberSince:
+          type: string
+          format: date-time
+
+    PrivateAdventurer:
+      allOf:
+        - $ref: '#/components/schemas/PublicAdventurer'
+        - type: object
+          description: Le profil complet, visible uniquement par son propriétaire
+          properties:
+            email:
+              type: string
+              format: email
+            helpPoints:
+              type: integer
+              description: Le solde disponible (séquestres déjà déduits)
+            role:
+              type: string
+              enum: [MEMBER, GUILD_MASTER]
+
+    # --- Quests -------------------------------------------------------------
+    QuestType:
+      type: string
+      enum: [HELP, BARTER]
+      description: HELP = un coup de main, BARTER = un troc (objet ou service)
+
+    QuestCategory:
+      type: string
+      enum: [DEV, DESIGN, COURSES, MATERIAL, STUDENT_LIFE, OTHER]
+
+    QuestStatus:
+      type: string
+      enum: [OPEN, IN_PROGRESS, COMPLETED, VALIDATED, CANCELLED]
+      description: |
+        Le cycle de vie complet est décrit par le diagramme d'états-transitions
+        (diagrammes/cycle-vie-quete.mmd). En résumé :
+        OPEN -> IN_PROGRESS (take) -> COMPLETED (complete) -> VALIDATED
+        (validate), avec les chemins IN_PROGRESS -> OPEN (abandon) et
+        OPEN -> CANCELLED (cancel).
+
+    NewQuest:
+      type: object
+      required: [title, description, type, category, reward]
+      properties:
+        title:
+          type: string
+          minLength: 5
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 2000
+        type:
+          $ref: '#/components/schemas/QuestType'
+        category:
+          $ref: '#/components/schemas/QuestCategory'
+        reward:
+          type: integer
+          minimum: 0
+          maximum: 500
+          description: En points d'entraide, mis sous séquestre à la création
+        photoUrl:
+          type: string
+          format: uri
+          nullable: true
+          description: URL retournée par POST /media
+
+    Quest:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        type:
+          $ref: '#/components/schemas/QuestType'
+        category:
+          $ref: '#/components/schemas/QuestCategory'
+        status:
+          $ref: '#/components/schemas/QuestStatus'
+        reward:
+          type: integer
+        photoUrl:
+          type: string
+          format: uri
+          nullable: true
+        author:
+          $ref: '#/components/schemas/AdventurerSummary'
+        taker:
+          type: object
+          nullable: true
+          description: null tant que personne n'a pris la quête
+          allOf:
+            - $ref: '#/components/schemas/AdventurerSummary'
+        createdAt:
+          type: string
+          format: date-time
+        takenAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        validatedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    AdventurerSummary:
+      type: object
+      description: La carte de visite minimale, pour éviter de gonfler les listes
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+        level:
+          type: integer
+
+    # --- Badges -------------------------------------------------------------
+    Badge:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Identifiant technique en anglais, stable
+          example: "FIRST_QUEST"
+        name:
+          type: string
+          description: Nom affiché, en français
+          example: "Première quête"
+        description:
+          type: string
+          example: "Réaliser et faire valider sa toute première quête"
+        icon:
+          type: string
+          description: Nom de l'icône dans le kit d'interface
+          example: "medal-bronze"
+        automatic:
+          type: boolean
+          description: true = attribué par les règles du domaine, false = à la main du maître de guilde
+
+    AwardedBadge:
+      allOf:
+        - $ref: '#/components/schemas/Badge'
+        - type: object
+          properties:
+            awardedAt:
+              type: string
+              format: date-time
+
+    # --- Erreurs ------------------------------------------------------------
+    Problem:
+      type: object
+      description: Erreur au format RFC 7807 (Problem Details for HTTP APIs)
+      properties:
+        type:
+          type: string
+          format: uri
+          description: URI qui identifie la famille d'erreur
+          example: "https://guilde.sergent.dev/problems/invalid-transition"
+        title:
+          type: string
+          description: Titre court, en français (destiné à l'affichage)
+          example: "Transition invalide"
+        status:
+          type: integer
+          example: 409
+        detail:
+          type: string
+          description: Explication lisible, en français
+          example: "La quête est IN_PROGRESS, elle ne peut pas être prise."
+
+    # --- Pagination ---------------------------------------------------------
+    Pagination:
+      type: object
+      description: |
+        Pagination par page, volontairement simple pour le S1. La pagination
+        par curseur est étudiée en cours (S2) et proposée en extension.
+      properties:
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          description: Nombre total d'éléments toutes pages confondues
+          example: 87
+        totalPages:
+          type: integer
+          example: 5
+
+security:
+  - jwt: []
+
+# =============================================================================
+# TEMPS RÉEL (hors périmètre OpenAPI, documenté ici par commodité)
+# -----------------------------------------------------------------------------
+# Connexion : WebSocket sur /v1/realtime?token=<accessToken>
+# Le serveur pousse des événements JSON de la forme :
+#   { "event": "...", "date": "...", "data": { ... } }
+#
+# Événements v1 :
+#   quest.taken      -> à l'auteur, quand un aventurier prend sa quête
+#                       data : { questId, title, taker: { id, username } }
+#   quest.completed  -> à l'auteur, quand le preneur déclare avoir fini
+#                       data : { questId, title }
+#   quest.validated  -> au preneur, quand l'auteur valide (avec les gains)
+#                       data : { questId, title, pointsEarned, xpEarned }
+#   badge.awarded    -> à l'intéressé, quand un badge lui est attribué
+#                       data : { badgeCode, name }
+#
+# Le client qui rate des événements (connexion coupée) retrouve l'état réel
+# en re-consultant l'API REST : le WebSocket notifie, il ne fait pas foi.
+# =============================================================================
+x-realtime:
+  url: /v1/realtime
+  authentication: "jeton d'accès en query string `token` (les WebSocket ne portent pas d'en-têtes après l'upgrade)"
+  events: [quest.taken, quest.completed, quest.validated, badge.awarded]
